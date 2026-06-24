@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, Image } from 'react-native';
 import { useRouter } from 'expo-router';
 import { supabase } from '../../lib/supabase';
 
@@ -11,23 +11,42 @@ export default function SignUpScreen() {
   const router = useRouter();
 
   const handleSignUp = async () => {
+    if (!email.toLowerCase().endsWith('@gmail.com')) {
+      Alert.alert('Invalid Email', 'Please use a valid @gmail.com email address.');
+      return;
+    }
+
+    if (password.length < 6) {
+      Alert.alert('Weak Password', 'Password must be at least 6 characters long.');
+      return;
+    }
+
     if (password !== confirmPassword) {
       Alert.alert('Error', 'Passwords do not match');
       return;
     }
+
     setLoading(true);
     const { error } = await supabase.auth.signUp({ email, password });
+    
     if (error) {
-      Alert.alert('Sign Up Failed', error.message);
+      if (error.message.toLowerCase().includes('already registered') || error.message.toLowerCase().includes('already in use')) {
+        Alert.alert('Sign Up Failed', 'This email is already in use.');
+      } else {
+        Alert.alert('Sign Up Failed', error.message);
+      }
     } else {
-      router.replace('./setup/caregiver');
+      router.replace('/setup/caregiver' as any);
     }
     setLoading(false);
   };
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Create Account</Text>
+      <View style={styles.logoContainer}>
+        <Image source={require('../../assets/images/png-logo.png')} style={styles.logo} resizeMode="contain" />
+        <Text style={styles.title}>Create Account</Text>
+      </View>
       
       <View style={styles.form}>
         <TextInput
@@ -75,11 +94,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     padding: 24,
   },
+  logoContainer: {
+    alignItems: 'center',
+    marginBottom: 40,
+  },
+  logo: {
+    width: 120,
+    height: 120,
+    marginBottom: 16,
+  },
   title: {
     fontSize: 32,
     fontWeight: 'bold',
     color: '#14cd2fff',
-    marginBottom: 40,
     textAlign: 'center',
   },
   form: {

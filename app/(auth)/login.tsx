@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, Image } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import * as Linking from 'expo-linking';
@@ -17,7 +17,7 @@ export default function LoginScreen() {
     setLoading(true);
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) Alert.alert('Login Failed', error.message);
-    else router.replace('/dashboard' as any);
+    else router.replace('/(tabs)' as any);
     setLoading(false);
   };
 
@@ -38,8 +38,7 @@ export default function LoginScreen() {
       if (data?.url) {
         const res = await WebBrowser.openAuthSessionAsync(data.url, redirectUrl);
         if (res.type === 'success' && res.url) {
-          // You can parse tokens from res.url here if using implicit flow
-          router.replace('/dashboard' as any);
+          router.replace('/(tabs)' as any);
         }
       }
     } catch (err: any) {
@@ -51,7 +50,10 @@ export default function LoginScreen() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>ElderCareAI</Text>
+      <View style={styles.logoContainer}>
+        <Image source={require('../../assets/images/png-logo.png')} style={styles.logo} resizeMode="contain" />
+        <Text style={styles.title}>ElderCareAI</Text>
+      </View>
       
       <View style={styles.form}>
         <TextInput
@@ -77,6 +79,7 @@ export default function LoginScreen() {
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.googleButton} onPress={handleGoogleSignIn} disabled={loading}>
+          <Image source={require('../../assets/images/google-logo.png')} style={styles.googleIcon} resizeMode="contain" />
           <Text style={styles.googleButtonText}>Sign in with Google</Text>
         </TouchableOpacity>
         
@@ -98,11 +101,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     padding: 24,
   },
+  logoContainer: {
+    alignItems: 'center',
+    marginBottom: 40,
+  },
+  logo: {
+    width: 120,
+    height: 120,
+    marginBottom: 16,
+  },
   title: {
     fontSize: 32,
     fontWeight: 'bold',
     color: '#14cd2fff',
-    marginBottom: 40,
     textAlign: 'center',
   },
   form: {
@@ -131,8 +142,15 @@ const styles = StyleSheet.create({
     backgroundColor: '#14cd2fff',
     padding: 16,
     borderRadius: 12,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     marginTop: 8,
+  },
+  googleIcon: {
+    width: 24,
+    height: 24,
+    marginRight: 8,
   },
   googleButtonText: {
     color: '#0F172A',
