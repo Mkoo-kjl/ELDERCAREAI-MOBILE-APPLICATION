@@ -4,11 +4,14 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 type ThemeColors = {
   background: string;
   card: string;
+  cardElevated: string;
   text: string;
   subtitle: string;
   primary: string;
   accent: string;
   border: string;
+  gradientStart: string;
+  gradientEnd: string;
 };
 
 type ThemeContextType = {
@@ -19,22 +22,28 @@ type ThemeContextType = {
 
 const lightColors: ThemeColors = {
   background: '#ffffff',
-  card: '#f1f5f9', // Slightly distinct from pure white, or we could use #dce0e7 like the auth inputs
-  text: '#000000',
+  card: '#f1f5f9',
+  cardElevated: '#ffffff',
+  text: '#0F172A',
   subtitle: '#64748B',
   primary: '#38BDF8', // Blue
   accent: '#14CD2F', // Green
   border: '#e2e8f0',
+  gradientStart: '#FFFFFF',
+  gradientEnd: '#EBF4FF',
 };
 
 const darkColors: ThemeColors = {
   background: '#0F172A',
   card: '#1E293B',
-  text: '#ffffff',
+  cardElevated: '#243049',
+  text: '#F1F5F9',
   subtitle: '#94A3B8',
   primary: '#38BDF8', // Blue
   accent: '#14CD2F', // Green
   border: '#334155',
+  gradientStart: '#0B1120',
+  gradientEnd: '#162544',
 };
 
 const ThemeContext = createContext<ThemeContextType>({

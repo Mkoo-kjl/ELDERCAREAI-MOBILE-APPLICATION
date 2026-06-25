@@ -1,31 +1,71 @@
-import { useEffect } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, Animated, Image } from 'react-native';
 import { useRouter } from 'expo-router';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '../providers/AuthProvider';
 
 export default function SplashScreen() {
   const router = useRouter();
   const { session, initialized } = useAuth();
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const scaleAnim = useRef(new Animated.Value(0.8)).current;
+  const pulseAnim = useRef(new Animated.Value(0.3)).current;
+
+  useEffect(() => {
+    // Entrance animation
+    Animated.parallel([
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 800,
+        useNativeDriver: true,
+      }),
+      Animated.spring(scaleAnim, {
+        toValue: 1,
+        friction: 6,
+        tension: 40,
+        useNativeDriver: true,
+      }),
+    ]).start();
+
+    // Pulse loader
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 0.3, duration: 800, useNativeDriver: true }),
+      ])
+    ).start();
+  }, []);
 
   useEffect(() => {
     if (!initialized) return;
 
     const timer = setTimeout(() => {
       if (session) {
-        router.replace('/dashboard');
+        router.replace('/(tabs)' as any);
       } else {
         router.replace('/(auth)/login');
       }
-    }, 2000);
+    }, 2500);
 
     return () => clearTimeout(timer);
   }, [session, initialized, router]);
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>ElderCare</Text>
-      <Text style={styles.subtitle}>Connecting you and your loved ones</Text>
-    </View>
+    <LinearGradient colors={['#0B1120', '#162544', '#1E3A5F']} style={styles.container}>
+      <Animated.View style={[styles.logoWrapper, { opacity: fadeAnim, transform: [{ scale: scaleAnim }] }]}>
+        <View style={styles.logoGlow}>
+          <Image source={require('../assets/images/png-logo.png')} style={styles.logo} resizeMode="contain" />
+        </View>
+        <Text style={styles.title}>ElderCare<Text style={styles.titleAccent}>AI</Text></Text>
+        <Text style={styles.subtitle}>Connecting you and your loved ones</Text>
+      </Animated.View>
+
+      <Animated.View style={[styles.loaderContainer, { opacity: pulseAnim }]}>
+        <View style={styles.loaderDot} />
+        <View style={[styles.loaderDot, styles.loaderDotMid]} />
+        <View style={styles.loaderDot} />
+      </Animated.View>
+    </LinearGradient>
   );
 }
 
@@ -34,16 +74,54 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#0F172A',
+  },
+  logoWrapper: {
+    alignItems: 'center',
+  },
+  logoGlow: {
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    backgroundColor: 'rgba(56, 189, 248, 0.08)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(56, 189, 248, 0.15)',
+  },
+  logo: {
+    width: 100,
+    height: 100,
   },
   title: {
-    fontSize: 48,
+    fontSize: 40,
     fontWeight: '800',
-    color: '#38BDF8',
+    color: '#F1F5F9',
     marginBottom: 8,
+    letterSpacing: -0.5,
+  },
+  titleAccent: {
+    color: '#38BDF8',
   },
   subtitle: {
-    fontSize: 16,
-    color: '#94A3B8',
+    fontSize: 15,
+    color: '#64748B',
+    fontWeight: '500',
+    letterSpacing: 0.3,
+  },
+  loaderContainer: {
+    flexDirection: 'row',
+    position: 'absolute',
+    bottom: 80,
+    gap: 8,
+  },
+  loaderDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#38BDF8',
+  },
+  loaderDotMid: {
+    backgroundColor: '#14CD2F',
   },
 });

@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Image, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
+import { LinearGradient } from 'expo-linear-gradient';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../providers/AuthProvider';
 import { useTheme } from '../../providers/ThemeProvider';
@@ -8,20 +10,37 @@ import { Ionicons } from '@expo/vector-icons';
 
 const VITALS_IDS = ['heart-rate', 'oxygen-saturation', 'sleep', 'heart-rate-variability', 'steps'];
 
+type ElderlyProfile = {
+  name: string;
+  age: string;
+  gender: string;
+  weight: string;
+  height: string;
+  bloodType: string;
+};
+
 export default function Dashboard() {
   const { session, user } = useAuth();
   const { colors, isDarkMode } = useTheme();
   const router = useRouter();
   
-  const [profile, setProfile] = useState<{name: string, age: string, gender: string}>({ name: 'Loading...', age: '', gender: '' });
+  const [profile, setProfile] = useState<ElderlyProfile>({
+    name: 'Loading...', age: '', gender: '', weight: '', height: '', bloodType: '',
+  });
+  const [profileImage, setProfileImage] = useState<string | null>(null);
   const [vitalsData, setVitalsData] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(false);
 
   const fetchElderlyProfile = async () => {
     if (!user) return;
+
+    // Load photo from AsyncStorage
+    const savedPhoto = await AsyncStorage.getItem(`elderly_photo_${user.id}`);
+    if (savedPhoto) setProfileImage(savedPhoto);
+
     const { data, error } = await supabase
       .from('elderly_profiles')
-      .select('full_name, age, gender')
+      .select('full_name, age, gender, weight_kg, height_cm, blood_type')
       .eq('caregiver_id', user.id)
       .limit(1)
       .single();
@@ -29,11 +48,14 @@ export default function Dashboard() {
     if (data) {
       setProfile({
         name: data.full_name || 'Unknown',
-        age: data.age ? `${data.age} y.o` : '',
-        gender: data.gender ? `${data.gender}, ` : '',
+        age: data.age ? `${data.age}` : '',
+        gender: data.gender || '',
+        weight: data.weight_kg ? `${data.weight_kg} kg` : '',
+        height: data.height_cm ? `${data.height_cm} cm` : '',
+        bloodType: data.blood_type || '',
       });
     } else {
-      setProfile({ name: 'Unknown Profile', age: '', gender: '' });
+      setProfile({ name: 'No Profile', age: '', gender: '', weight: '', height: '', bloodType: '' });
     }
   };
 
@@ -82,15 +104,22 @@ export default function Dashboard() {
     loadVitals();
   }, [loadVitals]);
 
-  const renderCard = (title: string, value: string, unit: string, fullWidth: boolean = false) => (
-    <View style={[styles.card, fullWidth ? styles.cardFull : styles.cardHalf, { backgroundColor: colors.card, shadowColor: isDarkMode ? '#000' : '#CBD5E1' }]}>
+  const detailPills = [
+    { label: profile.age ? `${profile.age} y.o` : '', icon: 'calendar-outline' as const },
+    { label: profile.gender, icon: 'person-outline' as const },
+    { label: profile.weight, icon: 'fitness-outline' as const },
+    { label: profile.height, icon: 'resize-outline' as const },
+    { label: profile.bloodType, icon: 'water-outline' as const },
+  ].filter(p => p.label);
+
+  const renderCard = (title: string, value: string, unit: string, icon: string, fullWidth: boolean = false) => (
+    <View style={[styles.card, fullWidth ? styles.cardFull : styles.cardHalf, { backgroundColor: colors.cardElevated, shadowColor: isDarkMode ? '#000' : '#94A3B8' }]}>
       <View style={styles.cardHeader}>
-        <Text style={[styles.cardTitle, { color: colors.text }]}>{title}</Text>
-        <Ionicons name="ellipsis-horizontal" size={20} color={colors.subtitle} />
+        <View style={styles.cardTitleRow}>
+          <Ionicons name={icon as any} size={16} color={colors.primary} style={{ marginRight: 6 }} />
+          <Text style={[styles.cardTitle, { color: colors.subtitle }]}>{title}</Text>
+        </View>
       </View>
-      
-      {/* Placeholder for chart visuals */}
-      <View style={[styles.chartPlaceholder, { height: fullWidth ? 10 : 40 }]} />
       
       <View style={styles.cardFooter}>
         <Text style={[styles.cardValue, { color: colors.text }]}>{value}</Text>
@@ -103,44 +132,76 @@ export default function Dashboard() {
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         
-        {/* Profile Header */}
-        <View style={styles.profileHeader}>
-          <View style={styles.avatarContainer}>
-            <Ionicons name="person" size={24} color="#fff" />
+        {/* Profile Header with Gradient */}
+        <LinearGradient
+          colors={isDarkMode ? ['#162544', '#0F172A'] : ['#EBF4FF', '#FFFFFF']}
+          style={styles.headerGradient}
+        >
+          {/* Large Profile Picture */}
+          <View style={styles.profilePicContainer}>
+            {profileImage ? (
+              <Image source={{ uri: profileImage }} style={styles.profilePic} />
+            ) : (
+              <LinearGradient
+                colors={['#38BDF8', '#14CD2F']}
+                style={styles.profilePicPlaceholder}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+              >
+                <Ionicons name="person" size={48} color="#fff" />
+              </LinearGradient>
+            )}
+            <View style={[styles.onlineDot, { borderColor: isDarkMode ? '#0F172A' : '#EBF4FF' }]} />
           </View>
-          <View style={styles.profileInfo}>
-            <Text style={[styles.profileName, { color: colors.text }]}>{profile.name}</Text>
-            <Text style={[styles.profileDetails, { color: colors.subtitle }]}>
-              {profile.gender}{profile.age}
-            </Text>
-          </View>
-        </View>
+
+          {/* Name */}
+          <Text style={[styles.profileName, { color: colors.text }]}>{profile.name}</Text>
+          
+          {/* Detail Pills */}
+          {detailPills.length > 0 && (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pillsRow}>
+              {detailPills.map((pill, i) => (
+                <View key={i} style={[styles.pill, { backgroundColor: isDarkMode ? colors.card : 'rgba(56, 189, 248, 0.08)', borderColor: isDarkMode ? colors.border : 'rgba(56, 189, 248, 0.15)' }]}>
+                  <Ionicons name={pill.icon} size={13} color={colors.primary} />
+                  <Text style={[styles.pillText, { color: colors.text }]}>{pill.label}</Text>
+                </View>
+              ))}
+            </ScrollView>
+          )}
+        </LinearGradient>
 
         {/* Dashboard Title Row */}
         <View style={styles.sectionTitleRow}>
-          <Text style={[styles.sectionTitle, { color: colors.text }]}>Dashboard</Text>
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>Health Vitals</Text>
           <TouchableOpacity onPress={() => router.push('/(tabs)/health' as any)}>
-            <Text style={[styles.viewAllText, { color: colors.subtitle }]}>View all</Text>
+            <Text style={[styles.viewAllText, { color: colors.primary }]}>View all →</Text>
           </TouchableOpacity>
         </View>
 
         {/* Cards Grid */}
         <View style={styles.grid}>
           <View style={styles.row}>
-            {renderCard('Heart rate', vitalsData['heart-rate']?.value || '--', 'BPM')}
-            {renderCard('SpO2', vitalsData['oxygen-saturation']?.value || '--', '%')}
+            {renderCard('Heart Rate', vitalsData['heart-rate']?.value || '--', 'BPM', 'heart-outline')}
+            {renderCard('SpO2', vitalsData['oxygen-saturation']?.value || '--', '%', 'pulse-outline')}
           </View>
           
-          {renderCard('Sleep', vitalsData['sleep']?.value || '--', 'hrs', true)}
+          {renderCard('Sleep', vitalsData['sleep']?.value || '--', 'hrs', 'moon-outline', true)}
           
           <View style={styles.row}>
-            {renderCard('HRV', vitalsData['heart-rate-variability']?.value || '--', 'ms')}
-            {renderCard('Steps', vitalsData['steps']?.value || '--', '')}
+            {renderCard('HRV', vitalsData['heart-rate-variability']?.value || '--', 'ms', 'analytics-outline')}
+            {renderCard('Steps', vitalsData['steps']?.value || '--', '', 'footsteps-outline')}
           </View>
         </View>
 
-        <TouchableOpacity style={[styles.refreshButton, { backgroundColor: colors.primary }]} onPress={loadVitals} disabled={loading}>
-          {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.refreshText}>Refresh Data</Text>}
+        <TouchableOpacity style={styles.refreshButton} onPress={loadVitals} disabled={loading} activeOpacity={0.85}>
+          <LinearGradient colors={['#38BDF8', '#2DA3DC']} style={styles.refreshGradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
+            {loading ? <ActivityIndicator color="#fff" /> : (
+              <View style={styles.refreshContent}>
+                <Ionicons name="refresh-outline" size={18} color="#fff" style={{ marginRight: 6 }} />
+                <Text style={styles.refreshText}>Refresh Data</Text>
+              </View>
+            )}
+          </LinearGradient>
         </TouchableOpacity>
 
       </ScrollView>
@@ -153,65 +214,102 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scroll: {
-    paddingTop: 60,
-    paddingHorizontal: 24,
     paddingBottom: 40,
   },
-  profileHeader: {
-    flexDirection: 'row',
+  headerGradient: {
+    paddingTop: 60,
+    paddingBottom: 28,
+    paddingHorizontal: 24,
     alignItems: 'center',
-    marginBottom: 32,
+    borderBottomLeftRadius: 28,
+    borderBottomRightRadius: 28,
   },
-  avatarContainer: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: '#38BDF8',
+  profilePicContainer: {
+    marginBottom: 16,
+    position: 'relative',
+  },
+  profilePic: {
+    width: 110,
+    height: 110,
+    borderRadius: 55,
+    borderWidth: 3,
+    borderColor: '#38BDF8',
+  },
+  profilePicPlaceholder: {
+    width: 110,
+    height: 110,
+    borderRadius: 55,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 16,
   },
-  profileInfo: {
-    flex: 1,
+  onlineDot: {
+    position: 'absolute',
+    bottom: 6,
+    right: 6,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: '#14CD2F',
+    borderWidth: 3,
   },
   profileName: {
-    fontSize: 20,
-    fontWeight: '700',
-    marginBottom: 4,
+    fontSize: 26,
+    fontWeight: '800',
+    marginBottom: 12,
+    letterSpacing: -0.3,
   },
-  profileDetails: {
-    fontSize: 14,
+  pillsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 4,
+  },
+  pill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    borderWidth: 1,
+    gap: 5,
+  },
+  pillText: {
+    fontSize: 12,
+    fontWeight: '600',
   },
   sectionTitleRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 16,
+    paddingHorizontal: 24,
+    marginTop: 24,
   },
   sectionTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
+    fontSize: 20,
+    fontWeight: '800',
+    letterSpacing: -0.3,
   },
   viewAllText: {
-    fontSize: 14,
-    fontWeight: '500',
+    fontSize: 13,
+    fontWeight: '600',
   },
   grid: {
-    gap: 16,
-    marginBottom: 32,
+    gap: 12,
+    paddingHorizontal: 24,
+    marginBottom: 24,
   },
   row: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    gap: 16,
+    gap: 12,
   },
   card: {
-    borderRadius: 24,
-    padding: 20,
-    elevation: 4,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
+    borderRadius: 20,
+    padding: 18,
+    elevation: 3,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
   },
   cardHalf: {
     flex: 1,
@@ -220,39 +318,45 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   cardHeader: {
+    marginBottom: 14,
+  },
+  cardTitleRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 16,
   },
   cardTitle: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '600',
-  },
-  chartPlaceholder: {
-    marginBottom: 16,
   },
   cardFooter: {
     flexDirection: 'row',
     alignItems: 'baseline',
   },
   cardValue: {
-    fontSize: 32,
+    fontSize: 30,
     fontWeight: '800',
     marginRight: 4,
   },
   cardUnit: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '500',
   },
   refreshButton: {
-    paddingVertical: 16,
+    marginHorizontal: 24,
     borderRadius: 16,
+    overflow: 'hidden',
+  },
+  refreshGradient: {
+    paddingVertical: 15,
+    alignItems: 'center',
+  },
+  refreshContent: {
+    flexDirection: 'row',
     alignItems: 'center',
   },
   refreshText: {
     color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
+    fontSize: 15,
+    fontWeight: '700',
   },
 });
