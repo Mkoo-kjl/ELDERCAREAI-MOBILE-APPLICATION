@@ -5,9 +5,8 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/png-logo.png",
-    "scheme": "com.yourapp",
+    "scheme": "eldercareai",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "ios": {
       "supportsTablet": true
     },
@@ -16,12 +15,11 @@
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/png-logo.png"
       },
-      "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/images/png-logo.png"
     },
     "plugins": [
       "expo-router",

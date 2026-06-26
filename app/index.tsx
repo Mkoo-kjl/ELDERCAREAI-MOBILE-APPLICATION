@@ -1,8 +1,10 @@
 import { useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, Animated, Image } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '../providers/AuthProvider';
+import { supabase } from '../lib/supabase';
 
 export default function SplashScreen() {
   const router = useRouter();
@@ -39,12 +41,23 @@ export default function SplashScreen() {
   useEffect(() => {
     if (!initialized) return;
 
-    const timer = setTimeout(() => {
-      if (session) {
+    const checkSetup = async () => {
+      if (!session) {
+        router.replace('/(auth)/login');
+        return;
+      }
+
+      const setupComplete = await AsyncStorage.getItem(`setup_complete_${session.user.id}`);
+
+      if (setupComplete === 'true') {
         router.replace('/(tabs)' as any);
       } else {
-        router.replace('/(auth)/login');
+        router.replace('/(setup)/fitness' as any);
       }
+    };
+
+    const timer = setTimeout(() => {
+      checkSetup();
     }, 2500);
 
     return () => clearTimeout(timer);

@@ -5,43 +5,91 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import * as WebBrowser from 'expo-web-browser';
 import * as Linking from 'expo-linking';
+import { makeRedirectUri } from 'expo-auth-session';
 import { supabase } from '../../lib/supabase';
 
 WebBrowser.maybeCompleteAuthSession();
 
 export default function LoginScreen() {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
   const router = useRouter();
 
-  const handleLogin = async () => {
-    setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) Alert.alert('Login Failed', error.message);
-    else router.replace('/(tabs)' as any);
-    setLoading(false);
+  // Helper to parse the redirect URL from Supabase
+  const createSessionFromUrl = async (url: string) => {
+    try {
+      const parsedUrl = Linking.parse(url);
+      const params = parsedUrl.queryParams || {};
+
+      if (params.code) {
+        // PKCE flow
+        const { error } = await supabase.auth.exchangeCodeForSession(params.code as string);
+        if (error) throw error;
+      } else {
+        // Fallback for implicit flow
+        let accessToken = params.access_token as string;
+        let refreshToken = params.refresh_token as string;
+
+        if (!accessToken || !refreshToken) {
+          const hash = url.split('#')[1];
+          if (hash) {
+            const hashParams = hash.split('&').reduce((acc, current) => {
+              const [key, value] = current.split('=');
+              acc[key] = decodeURIComponent(value);
+              return acc;
+            }, {} as Record<string, string>);
+            accessToken = hashParams.access_token;
+            refreshToken = hashParams.refresh_token;
+          }
+        }
+
+        if (accessToken && refreshToken) {
+          const { error } = await supabase.auth.setSession({
+            access_token: accessToken,
+            refresh_token: refreshToken,
+          });
+          if (error) throw error;
+        }
+      }
+    } catch (e: any) {
+      console.error('[Auth] Error parsing session:', e);
+      throw e;
+    }
   };
 
   const handleGoogleSignIn = async () => {
     try {
       setLoading(true);
-      const redirectUrl = Linking.createURL('/(auth)/login');
+      // Let expo-auth-session determine the correct scheme (exp:// for Go, eldercareai:// for native)
+      const redirectUri = makeRedirectUri();
+      
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: redirectUrl,
+          redirectTo: redirectUri,
           skipBrowserRedirect: true,
+          queryParams: {
+            access_type: 'offline',
+            prompt: 'consent',
+          }
         },
       });
 
       if (error) throw error;
 
       if (data?.url) {
-        const res = await WebBrowser.openAuthSessionAsync(data.url, redirectUrl);
+        console.log('[Auth] Generated Redirect URI:', redirectUri);
+        
+        const res = await WebBrowser.openAuthSessionAsync(data.url, redirectUri);
         if (res.type === 'success' && res.url) {
-          router.replace('/(tabs)' as any);
+          await createSessionFromUrl(res.url);
+          // Navigate to the central dispatcher
+          router.replace('/' as any);
+        } else if (res.type !== 'success') {
+          Alert.alert(
+            'Sign In Cancelled',
+            `Browser closed or failed. Ensure this URL is in your Supabase Redirect Allow-list:\n\n${redirectUri}`,
+            [{ text: 'OK' }]
+          );
         }
       }
     } catch (err: any) {
@@ -62,53 +110,36 @@ export default function LoginScreen() {
         <Text style={styles.tagline}>Smart care for your loved ones</Text>
       </View>
 
-      {/* Form Card */}
+      {/* Sign In Card */}
       <View style={styles.formCard}>
-        <View style={styles.inputWrapper}>
-          <Ionicons name="mail-outline" size={20} color="#94A3B8" style={styles.inputIcon} />
-          <TextInput
-            style={styles.input}
-            placeholder="Email"
-            placeholderTextColor="#94A3B8"
-            autoCapitalize="none"
-            keyboardType="email-address"
-            value={email}
-            onChangeText={setEmail}
-          />
+        <View style={styles.infoRow}>
+          <Ionicons name="information-circle-outline" size={18} color="#38BDF8" />
+          <Text style={styles.infoText}>
+            Sign in with the Google account connected to your Google Health app to sync vitals.
+          </Text>
         </View>
-
-        <View style={styles.inputWrapper}>
-          <Ionicons name="lock-closed-outline" size={20} color="#94A3B8" style={styles.inputIcon} />
-          <TextInput
-            style={styles.input}
-            placeholder="Password"
-            placeholderTextColor="#94A3B8"
-            secureTextEntry={!showPassword}
-            value={password}
-            onChangeText={setPassword}
-          />
-          <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.eyeIcon}>
-            <Ionicons name={showPassword ? 'eye-off-outline' : 'eye-outline'} size={20} color="#94A3B8" />
-          </TouchableOpacity>
-        </View>
-
-        <TouchableOpacity style={styles.button} onPress={handleLogin} disabled={loading} activeOpacity={0.85}>
-          <LinearGradient colors={['#38BDF8', '#2DA3DC']} style={styles.buttonGradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
-            {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Sign In</Text>}
-          </LinearGradient>
-        </TouchableOpacity>
 
         <TouchableOpacity style={styles.googleButton} onPress={handleGoogleSignIn} disabled={loading} activeOpacity={0.85}>
-          <Image source={require('../../assets/images/google-logo.png')} style={styles.googleIcon} resizeMode="contain" />
-          <Text style={styles.googleButtonText}>Sign in with Google</Text>
+          <LinearGradient colors={['#4285F4', '#3367D6']} style={styles.googleGradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
+            {loading ? (
+              <View style={styles.googleContent}>
+                <ActivityIndicator color="#fff" style={{ marginRight: 10 }} />
+                <Text style={styles.googleButtonText}>Signing in...</Text>
+              </View>
+            ) : (
+              <View style={styles.googleContent}>
+                <View style={styles.googleIconWrapper}>
+                  <Image source={require('../../assets/images/google-logo.png')} style={styles.googleIcon} resizeMode="contain" />
+                </View>
+                <Text style={styles.googleButtonText}>Sign in with Google</Text>
+              </View>
+            )}
+          </LinearGradient>
         </TouchableOpacity>
       </View>
 
       <View style={styles.footer}>
-        <Text style={styles.footerText}>Don't have an account? </Text>
-        <TouchableOpacity onPress={() => router.push('/(auth)/signup' as any)}>
-          <Text style={styles.link}>Sign Up</Text>
-        </TouchableOpacity>
+        <Ionicons name="shield-checkmark-outline" size={14} color="#94A3B8" />    
       </View>
     </LinearGradient>
   );
@@ -170,70 +201,54 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(226, 232, 240, 0.6)',
   },
-  inputWrapper: {
+  infoRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F1F5F9',
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
+    alignItems: 'flex-start',
+    gap: 8,
+    paddingHorizontal: 4,
   },
-  inputIcon: {
-    paddingLeft: 14,
-  },
-  input: {
+  infoText: {
     flex: 1,
-    padding: 15,
-    color: '#0F172A',
-    fontSize: 15,
-  },
-  eyeIcon: {
-    paddingRight: 14,
-  },
-  button: {
-    borderRadius: 14,
-    overflow: 'hidden',
-    marginTop: 4,
-  },
-  buttonGradient: {
-    padding: 16,
-    alignItems: 'center',
-  },
-  buttonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '700',
+    fontSize: 13,
+    color: '#64748B',
+    lineHeight: 19,
+    fontWeight: '500',
   },
   googleButton: {
-    backgroundColor: '#14CD2F',
-    padding: 15,
     borderRadius: 14,
-    flexDirection: 'row',
+    overflow: 'hidden',
+  },
+  googleGradient: {
+    paddingVertical: 16,
     alignItems: 'center',
     justifyContent: 'center',
   },
+  googleContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  googleIconWrapper: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#fff',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
+  },
   googleIcon: {
-    width: 22,
-    height: 22,
-    marginRight: 8,
+    width: 18,
+    height: 18,
   },
   googleButtonText: {
     color: '#fff',
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '700',
   },
   footer: {
     flexDirection: 'row',
     justifyContent: 'center',
+    alignItems: 'center',
     marginTop: 28,
-  },
-  footerText: {
-    color: '#64748B',
-    fontSize: 14,
-  },
-  link: {
-    color: '#38BDF8',
-    fontWeight: '700',
-    fontSize: 14,
   },
 });
