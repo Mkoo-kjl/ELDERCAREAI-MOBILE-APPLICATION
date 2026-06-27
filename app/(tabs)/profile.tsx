@@ -8,13 +8,15 @@ import { supabase } from '../../lib/supabase';
 import { useRouter } from 'expo-router';
 import { useTheme } from '../../providers/ThemeProvider';
 import ProfilePicturePicker from '../../components/ProfilePicturePicker';
-
+import { useGoogleHealth } from '../../providers/GoogleHealthProvider';
 export default function ProfileScreen() {
   const { user } = useAuth();
   const router = useRouter();
   const { isDarkMode, toggleTheme, colors } = useTheme();
   const [caregiverPhoto, setCaregiverPhoto] = useState<string | null>(null);
   const [elderlyPhoto, setElderlyPhoto] = useState<string | null>(null);
+
+  const { connectionStatus, disconnect, reconnectGoogleHealth, connectGoogleHealth, isConnecting } = useGoogleHealth();
 
   useEffect(() => {
     loadPhotos();
@@ -68,6 +70,46 @@ export default function ProfileScreen() {
                 <Text style={[styles.cardLabel, { color: colors.subtitle }]}>Logged in as</Text>
                 <Text style={[styles.cardValue2, { color: colors.text }]}>{user?.email}</Text>
               </View>
+            </View>
+          </View>
+
+          {/* Google Health Connection */}
+          <Text style={[styles.sectionLabel, { color: colors.primary }]}>INTEGRATIONS</Text>
+          <View style={[styles.card, { backgroundColor: colors.cardElevated, shadowColor: isDarkMode ? '#000' : '#94A3B8' }]}>
+            <View style={styles.settingRow}>
+              <View style={styles.settingLeft}>
+                <View style={[styles.iconCircle, { backgroundColor: isDarkMode ? colors.card : 'rgba(20, 205, 47, 0.08)' }]}>
+                  <Ionicons name="fitness" size={20} color="#14CD2F" />
+                </View>
+                <View>
+                  <Text style={[styles.settingText, { color: colors.text }]}>Google Health</Text>
+                  <Text style={[styles.statusText, { 
+                    color: connectionStatus === 'connected' ? '#14CD2F' : 
+                           connectionStatus === 'expired' ? '#F59E0B' : colors.subtitle 
+                  }]}>
+                    {connectionStatus === 'connected' ? 'Connected (Fitbit Inspire 3)' : 
+                     connectionStatus === 'expired' ? 'Connection Expired' : 'Not Connected'}
+                  </Text>
+                </View>
+              </View>
+              
+              {connectionStatus === 'connected' ? (
+                <TouchableOpacity onPress={disconnect} style={styles.actionButton}>
+                  <Text style={[styles.actionButtonText, { color: '#EF4444' }]}>Disconnect</Text>
+                </TouchableOpacity>
+              ) : connectionStatus === 'expired' ? (
+                <TouchableOpacity onPress={reconnectGoogleHealth} style={styles.actionButton} disabled={isConnecting}>
+                  <Text style={[styles.actionButtonText, { color: '#F59E0B' }]}>
+                    {isConnecting ? 'Connecting...' : 'Reconnect'}
+                  </Text>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity onPress={connectGoogleHealth} style={styles.actionButton} disabled={isConnecting}>
+                  <Text style={[styles.actionButtonText, { color: colors.primary }]}>
+                    {isConnecting ? 'Connecting...' : 'Connect'}
+                  </Text>
+                </TouchableOpacity>
+              )}
             </View>
           </View>
 
@@ -238,5 +280,20 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 15,
     fontWeight: '700',
+  },
+  statusText: {
+    fontSize: 12,
+    fontWeight: '500',
+    marginTop: 2,
+  },
+  actionButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: 'rgba(148, 163, 184, 0.1)',
+  },
+  actionButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
   },
 });

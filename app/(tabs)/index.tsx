@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Image, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Image, RefreshControl } from 'react-native';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -7,8 +7,9 @@ import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../providers/AuthProvider';
 import { useTheme } from '../../providers/ThemeProvider';
 import { Ionicons } from '@expo/vector-icons';
-
-const VITALS_IDS = ['heart-rate', 'oxygen-saturation', 'sleep', 'heart-rate-variability', 'steps'];
+import { useGoogleHealth } from '../../providers/GoogleHealthProvider';
+import GoogleHealthPermissionModal from '../../components/GoogleHealthPermissionModal';
+import { useFocusEffect } from 'expo-router';
 
 type ElderlyProfile = {
   name: string;
@@ -20,21 +21,29 @@ type ElderlyProfile = {
 };
 
 export default function Dashboard() {
-  const { session, user } = useAuth();
+  const { user } = useAuth();
   const { colors, isDarkMode } = useTheme();
   const router = useRouter();
   
+  const {
+    connectionStatus,
+    showPermissionPrompt,
+    healthData,
+    isLoadingHealth,
+    error,
+    errorCode,
+    fetchLatestHealth,
+    reconnectGoogleHealth,
+  } = useGoogleHealth();
+
   const [profile, setProfile] = useState<ElderlyProfile>({
     name: 'Loading...', age: '', gender: '', weight: '', height: '', bloodType: '',
   });
   const [profileImage, setProfileImage] = useState<string | null>(null);
-  const [vitalsData, setVitalsData] = useState<Record<string, any>>({});
-  const [loading, setLoading] = useState(false);
 
   const fetchElderlyProfile = async () => {
     if (!user) return;
 
-    // Load photo from AsyncStorage
     const savedPhoto = await AsyncStorage.getItem(`elderly_photo_${user.id}`);
     if (savedPhoto) setProfileImage(savedPhoto);
 
@@ -59,95 +68,20 @@ export default function Dashboard() {
     }
   };
 
-  const fetchAggregatedData = async (dataTypeName: string, accessToken: string) => {
-    try {
-      const now = new Date();
-      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-      const endOfDay = now.getTime();
-
-      const res = await fetch(
-        'https://www.googleapis.com/fitness/v1/users/me/dataset:aggregate',
-        {
-          method: 'POST',
-          headers: { 
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            aggregateBy: [{ dataTypeName }],
-            bucketByTime: { durationMillis: endOfDay - startOfDay },
-            startTimeMillis: startOfDay,
-            endTimeMillis: endOfDay
-          })
-        }
-      );
-      if (!res.ok) {
-        throw new Error(`API Error: ${res.status}`);
-      }
-      return await res.json();
-    } catch (e) {
-      console.log(`Failed to fetch ${dataTypeName}:`, e);
-      return null;
-    }
-  };
-
-  const loadVitals = useCallback(async () => {
-    const accessToken = session?.provider_token;
-    if (!accessToken) {
-      console.log('No Google Access Token available.');
-      return;
-    }
-
-    setLoading(true);
-    const newVitals: Record<string, any> = {};
-    
-    // 1. Heart Rate
-    const hrData = await fetchAggregatedData('com.google.heart_rate.bpm', accessToken);
-    let hrVal = '--';
-    if (hrData?.bucket?.[0]?.dataset?.[0]?.point?.length > 0) {
-      const points = hrData.bucket[0].dataset[0].point;
-      const lastPoint = points[points.length - 1];
-      if (lastPoint.value && lastPoint.value.length > 0) {
-        hrVal = Math.round(lastPoint.value[0].fpVal).toString();
-      }
-    }
-    newVitals['heart-rate'] = { value: hrVal };
-
-    // 2. Steps
-    const stepsData = await fetchAggregatedData('com.google.step_count.delta', accessToken);
-    let stepsVal = '--';
-    if (stepsData?.bucket?.[0]?.dataset?.[0]?.point?.length > 0) {
-      const points = stepsData.bucket[0].dataset[0].point;
-      if (points[0].value && points[0].value.length > 0) {
-        stepsVal = points[0].value[0].intVal.toString();
-      }
-    }
-    newVitals['steps'] = { value: stepsVal };
-
-    // 3. SpO2
-    const spo2Data = await fetchAggregatedData('com.google.oxygen_saturation', accessToken);
-    let spo2Val = '--';
-    if (spo2Data?.bucket?.[0]?.dataset?.[0]?.point?.length > 0) {
-      const points = spo2Data.bucket[0].dataset[0].point;
-      if (points[points.length - 1].value && points[points.length - 1].value.length > 0) {
-        spo2Val = Math.round(points[points.length - 1].value[0].fpVal).toString();
-      }
-    }
-    newVitals['oxygen-saturation'] = { value: spo2Val };
-
-    // For complex data types that aren't easily aggregated via REST, we provide fallbacks
-    // since Sleep parsing requires complex segment analysis
-    newVitals['sleep'] = { value: '7.5' }; 
-    newVitals['heart-rate-variability'] = { value: '42' }; 
-
-    setVitalsData(newVitals);
-    setLoading(false);
-  }, [session]);
-
   useEffect(() => {
     fetchElderlyProfile();
-    loadVitals();
-  }, [loadVitals]);
+  }, [user]);
+
+  // Fetch health data whenever the tab comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      fetchLatestHealth();
+    }, [fetchLatestHealth])
+  );
+
+  const onRefresh = useCallback(async () => {
+    await fetchLatestHealth();
+  }, [fetchLatestHealth]);
 
   const detailPills = [
     { label: profile.age ? `${profile.age} y.o` : '', icon: 'calendar-outline' as const },
@@ -157,13 +91,18 @@ export default function Dashboard() {
     { label: profile.bloodType, icon: 'water-outline' as const },
   ].filter(p => p.label);
 
-  const renderCard = (title: string, value: string, unit: string, icon: string, fullWidth: boolean = false) => (
+  const renderCard = (title: string, value: string, unit: string, icon: string, fullWidth: boolean = false, timestamp?: string) => (
     <View style={[styles.card, fullWidth ? styles.cardFull : styles.cardHalf, { backgroundColor: colors.cardElevated, shadowColor: isDarkMode ? '#000' : '#94A3B8' }]}>
       <View style={styles.cardHeader}>
         <View style={styles.cardTitleRow}>
           <Ionicons name={icon as any} size={16} color={colors.primary} style={{ marginRight: 6 }} />
           <Text style={[styles.cardTitle, { color: colors.subtitle }]}>{title}</Text>
         </View>
+        {timestamp && (
+          <Text style={[styles.timestampText, { color: colors.subtitle }]}>
+            {new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          </Text>
+        )}
       </View>
       
       <View style={styles.cardFooter}>
@@ -175,7 +114,23 @@ export default function Dashboard() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+      <GoogleHealthPermissionModal
+        visible={showPermissionPrompt}
+        isReconnect={connectionStatus === 'expired'}
+      />
+      
+      <ScrollView 
+        contentContainerStyle={styles.scroll} 
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={isLoadingHealth}
+            onRefresh={onRefresh}
+            tintColor={colors.primary}
+            colors={[colors.primary]}
+          />
+        }
+      >
         
         {/* Profile Header with Gradient */}
         <LinearGradient
@@ -223,31 +178,50 @@ export default function Dashboard() {
           </TouchableOpacity>
         </View>
 
+        {/* Error Banner */}
+        {error && !showPermissionPrompt && (
+          <View style={styles.errorBanner}>
+            <Ionicons name="alert-circle" size={20} color="#EF4444" style={{ marginRight: 8 }} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.errorText}>{error}</Text>
+            </View>
+            {(errorCode === 'TOKEN_EXPIRED' || errorCode === 'TOKEN_REVOKED') && (
+              <TouchableOpacity style={styles.reconnectButton} onPress={reconnectGoogleHealth}>
+                <Text style={styles.reconnectButtonText}>Reconnect</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
+
         {/* Cards Grid */}
         <View style={styles.grid}>
-          <View style={styles.row}>
-            {renderCard('Heart Rate', vitalsData['heart-rate']?.value || '--', 'BPM', 'heart-outline')}
-            {renderCard('SpO2', vitalsData['oxygen-saturation']?.value || '--', '%', 'pulse-outline')}
-          </View>
-          
-          {renderCard('Sleep', vitalsData['sleep']?.value || '--', 'hrs', 'moon-outline', true)}
-          
-          <View style={styles.row}>
-            {renderCard('HRV', vitalsData['heart-rate-variability']?.value || '--', 'ms', 'analytics-outline')}
-            {renderCard('Steps', vitalsData['steps']?.value || '--', '', 'footsteps-outline')}
-          </View>
-        </View>
-
-        <TouchableOpacity style={styles.refreshButton} onPress={loadVitals} disabled={loading} activeOpacity={0.85}>
-          <LinearGradient colors={['#38BDF8', '#2DA3DC']} style={styles.refreshGradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
-            {loading ? <ActivityIndicator color="#fff" /> : (
-              <View style={styles.refreshContent}>
-                <Ionicons name="refresh-outline" size={18} color="#fff" style={{ marginRight: 6 }} />
-                <Text style={styles.refreshText}>Refresh Data</Text>
+          {isLoadingHealth && !healthData ? (
+             <View style={styles.loadingContainer}>
+               <ActivityIndicator size="large" color={colors.primary} />
+               <Text style={[styles.loadingText, { color: colors.subtitle }]}>Syncing with Google Health...</Text>
+             </View>
+          ) : (
+            <>
+              <View style={styles.row}>
+                {renderCard('Heart Rate', healthData?.heartRate.value || '--', 'BPM', 'heart-outline', false, healthData?.heartRate.timestamp)}
+                {renderCard('SpO2', healthData?.bloodOxygen.value || '--', '%', 'pulse-outline', false, healthData?.bloodOxygen.timestamp)}
               </View>
-            )}
-          </LinearGradient>
-        </TouchableOpacity>
+              
+              {renderCard('Sleep', healthData?.sleep.value || '--', 'hrs', 'moon-outline', true, healthData?.sleep.timestamp)}
+              
+              <View style={styles.row}>
+                {renderCard('Exercise', healthData?.exercise.value || '--', 'min', 'analytics-outline', false, healthData?.exercise.timestamp)}
+                {renderCard('Steps', healthData?.steps.value || '--', '', 'footsteps-outline', false, healthData?.steps.timestamp)}
+              </View>
+
+              {healthData?.lastSyncedAt && (
+                <Text style={[styles.syncText, { color: colors.subtitle }]}>
+                  Last synced: {new Date(healthData.lastSyncedAt).toLocaleString()}
+                </Text>
+              )}
+            </>
+          )}
+        </View>
 
       </ScrollView>
     </View>
@@ -338,6 +312,35 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
   },
+  errorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+    marginHorizontal: 24,
+    marginBottom: 16,
+    padding: 16,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.2)',
+  },
+  errorText: {
+    color: '#EF4444',
+    fontSize: 13,
+    fontWeight: '500',
+    lineHeight: 18,
+  },
+  reconnectButton: {
+    backgroundColor: '#EF4444',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    marginLeft: 12,
+  },
+  reconnectButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
   grid: {
     gap: 12,
     paddingHorizontal: 24,
@@ -364,6 +367,9 @@ const styles = StyleSheet.create({
   },
   cardHeader: {
     marginBottom: 14,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
   cardTitleRow: {
     flexDirection: 'row',
@@ -372,6 +378,10 @@ const styles = StyleSheet.create({
   cardTitle: {
     fontSize: 13,
     fontWeight: '600',
+  },
+  timestampText: {
+    fontSize: 11,
+    fontWeight: '400',
   },
   cardFooter: {
     flexDirection: 'row',
@@ -386,22 +396,19 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '500',
   },
-  refreshButton: {
-    marginHorizontal: 24,
-    borderRadius: 16,
-    overflow: 'hidden',
-  },
-  refreshGradient: {
-    paddingVertical: 15,
+  loadingContainer: {
+    padding: 40,
     alignItems: 'center',
+    justifyContent: 'center',
   },
-  refreshContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    fontWeight: '500',
   },
-  refreshText: {
-    color: '#fff',
-    fontSize: 15,
-    fontWeight: '700',
+  syncText: {
+    fontSize: 11,
+    textAlign: 'center',
+    marginTop: 8,
   }
 });
