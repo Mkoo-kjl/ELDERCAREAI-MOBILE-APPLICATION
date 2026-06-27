@@ -74,14 +74,30 @@ export default function Dashboard() {
 
   // Fetch health data whenever the tab comes into focus
   useFocusEffect(
-    useCallback(() => {
+  useCallback(() => {
+    // Fetch immediately on focus
+    fetchLatestHealth();
+
+    // Then auto-refresh every 60 seconds while tab is active
+    const interval = setInterval(() => {
       fetchLatestHealth();
-    }, [fetchLatestHealth])
-  );
+    }, 60 * 1000); // 60 seconds — Fitbit syncs ~every few minutes anyway
+
+    // Cleanup: stop polling when user leaves this tab
+    return () => clearInterval(interval);
+  }, [fetchLatestHealth])
+);
 
   const onRefresh = useCallback(async () => {
     await fetchLatestHealth();
   }, [fetchLatestHealth]);
+
+  const [, setTick] = useState(0);
+
+useEffect(() => {
+  const timer = setInterval(() => setTick(t => t + 1), 60 * 1000);
+  return () => clearInterval(timer);
+}, []);
 
   const detailPills = [
     { label: profile.age ? `${profile.age} y.o` : '', icon: 'calendar-outline' as const },
@@ -91,6 +107,16 @@ export default function Dashboard() {
     { label: profile.bloodType, icon: 'water-outline' as const },
   ].filter(p => p.label);
 
+  function getDataAge(timestamp?: string): string {
+  if (!timestamp) return '';
+  const mins = Math.floor((Date.now() - new Date(timestamp).getTime()) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
   const renderCard = (title: string, value: string, unit: string, icon: string, fullWidth: boolean = false, timestamp?: string) => (
     <View style={[styles.card, fullWidth ? styles.cardFull : styles.cardHalf, { backgroundColor: colors.cardElevated, shadowColor: isDarkMode ? '#000' : '#94A3B8' }]}>
       <View style={styles.cardHeader}>
@@ -99,10 +125,10 @@ export default function Dashboard() {
           <Text style={[styles.cardTitle, { color: colors.subtitle }]}>{title}</Text>
         </View>
         {timestamp && (
-          <Text style={[styles.timestampText, { color: colors.subtitle }]}>
-            {new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-          </Text>
-        )}
+  <Text style={[styles.timestampText, { color: colors.subtitle }]}>
+    {getDataAge(timestamp)}
+  </Text>
+)}
       </View>
       
       <View style={styles.cardFooter}>
