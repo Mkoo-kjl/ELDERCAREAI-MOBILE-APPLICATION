@@ -117,26 +117,36 @@ useEffect(() => {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
-  const renderCard = (title: string, value: string, unit: string, icon: string, fullWidth: boolean = false, timestamp?: string) => (
+  const renderCard = (title: string, value: string, unit: string, icon: string, fullWidth: boolean = false, timestamp?: string) => {
+  const isLongText = value.length > 10; // sentences like the stale-sleep message
+
+  return (
     <View style={[styles.card, fullWidth ? styles.cardFull : styles.cardHalf, { backgroundColor: colors.cardElevated, shadowColor: isDarkMode ? '#000' : '#94A3B8' }]}>
       <View style={styles.cardHeader}>
         <View style={styles.cardTitleRow}>
           <Ionicons name={icon as any} size={16} color={colors.primary} style={{ marginRight: 6 }} />
           <Text style={[styles.cardTitle, { color: colors.subtitle }]}>{title}</Text>
         </View>
-        {timestamp && (
-  <Text style={[styles.timestampText, { color: colors.subtitle }]}>
-    {getDataAge(timestamp)}
-  </Text>
-)}
+        {timestamp && !isLongText && (
+          <Text style={[styles.timestampText, { color: colors.subtitle }]}>
+            {getDataAge(timestamp)}
+          </Text>
+        )}
       </View>
       
-      <View style={styles.cardFooter}>
-        <Text style={[styles.cardValue, { color: colors.text }]}>{value}</Text>
-        <Text style={[styles.cardUnit, { color: colors.subtitle }]}>{unit}</Text>
+      <View style={isLongText ? styles.cardFooterText : styles.cardFooter}>
+        <Text style={[
+          styles.cardValue,
+          { color: colors.text },
+          isLongText && styles.cardValueLong
+        ]}>
+          {value}
+        </Text>
+        {unit && !isLongText ? <Text style={[styles.cardUnit, { color: colors.subtitle }]}>{unit}</Text> : null}
       </View>
     </View>
   );
+};
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -286,6 +296,14 @@ const styles = StyleSheet.create({
     borderRadius: 55,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  cardFooterText: {
+    flexDirection: 'column',
+  },
+  cardValueLong: {
+    fontSize: 15,
+    fontWeight: '600',
+    lineHeight: 21,
   },
   onlineDot: {
     position: 'absolute',

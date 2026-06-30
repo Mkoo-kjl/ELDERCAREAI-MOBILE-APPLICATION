@@ -13,6 +13,7 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_CLIENT_ID")!;
 const GOOGLE_CLIENT_SECRET = Deno.env.get("GOOGLE_CLIENT_SECRET")!;
+const DEBUG = Deno.env.get("DEBUG") === "true";
 
 const HEALTH_API_BASE = "https://health.googleapis.com/v4/users/me/dataTypes";
 
@@ -30,7 +31,8 @@ interface HealthMetric {
   value: string;
   unit: string;
   timestamp?: string;
-  status: "ok" | "stale" | "unavailable";
+  status: "ok" | "stale" | "unavailable" | "error";
+  errorMessage?: string;
 }
 
 // ─── Token Refresh ────────────────────────────────────────────────────────────
@@ -109,191 +111,235 @@ async function fetchDataPoints(
   accessToken: string,
   dataType: string
 ): Promise<any> {
-  let url = `${HEALTH_API_BASE}/${dataType}/dataPoints?pageSize=500`;
+  const url = `${HEALTH_API_BASE}/${dataType}/dataPoints?pageSize=500`;
 
   console.log(`[google-health] Fetching: ${url}`);
 
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  try {
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
 
-  if (!res.ok) {
-    const errText = await res.text();
-    console.error(`[google-health] ${dataType} fetch failed:`, res.status, errText);
-    return { error: true, status: res.status, message: errText };
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error(`[google-health] ${dataType} fetch failed:`, res.status, errText);
+      return { error: true, status: res.status, message: errText };
+    }
+
+    return await res.json();
+  } catch (err) {
+    console.error(`[google-health] ${dataType} fetch threw:`, err);
+    return { error: true, status: 0, message: String(err) };
   }
-
-  return await res.json();
 }
-
+function extractTimestamp(sampleTime: any): string | null {
+  if (!sampleTime) return null;
+  if (sampleTime.physicalTime) return sampleTime.physicalTime;
+  if (sampleTime.civilTime) {
+    const { date, time } = sampleTime.civilTime;
+    if (date && time) {
+      return `${date.year}-${String(date.month).padStart(2, "0")}-${String(date.day).padStart(2, "0")}T${String(time.hours).padStart(2, "0")}:${String(time.minutes ?? 0).padStart(2, "0")}:${String(time.seconds ?? 0).padStart(2, "0")}Z`;
+    }
+  }
+  return null;
+}
 // ─── Parsers (Google Health API v4 format) ────────────────────────────────────
 
 function parseHeartRate(data: any): HealthMetric {
   try {
-    const points = data?.dataPoints;
-    if (Array.isArray(points) && points.length > 0) {
-      // Find the most recent point within the last 24 hours
-      const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      const recentPoints = points.filter(p => new Date(p.endTime ?? p.startTime) > yesterday);
-      
-      if (recentPoints.length > 0) {
-        const sorted = [...recentPoints].sort(
-          (a, b) => new Date(b.endTime ?? b.startTime).getTime() - new Date(a.endTime ?? a.startTime).getTime()
-        );
-        const latest = sorted[0];
-        const bpm = latest.value?.fpVal ?? latest.value?.intVal;
-        if (bpm != null) {
-          return {
-            value: Math.round(Number(bpm)).toString(),
-            unit: "BPM",
-            timestamp: latest.endTime ?? latest.startTime,
-            status: "ok",
-          };
-        }
-      }
-    }
+    const points = Array.isArray(data) ? data : data?.dataPoints;
+    if (!Array.isArray(points) || points.length === 0)
+      return { value: "--", unit: "BPM", status: "unavailable" };
+
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+    const validPoints = points
+      .map((p: any) => {
+        const ts = extractTimestamp(p.heartRate?.sampleTime);
+        const bpm = p.heartRate?.beatsPerMinute;
+        return { ts, bpm, date: ts ? new Date(ts) : null };
+      })
+      .filter((p) => p.bpm != null && p.date && p.date > yesterday)
+      .sort((a, b) => b.date!.getTime() - a.date!.getTime());
+
+    if (validPoints.length === 0)
+      return { value: "--", unit: "BPM", status: "unavailable" };
+
+    const latest = validPoints[0];
+    return {
+      value: Math.round(Number(latest.bpm)).toString(),
+      unit: "BPM",
+      timestamp: latest.ts ?? undefined,
+      status: "ok",
+    };
   } catch (e) {
     console.error("[google-health] Parse heart rate error:", e);
+    return { value: "--", unit: "BPM", status: "unavailable" };
   }
-  return { value: "--", unit: "BPM", status: "unavailable" };
 }
 
 function parseBloodOxygen(data: any): HealthMetric {
   try {
-    const points = data?.dataPoints;
-    if (Array.isArray(points) && points.length > 0) {
-      const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      const recentPoints = points.filter(p => new Date(p.endTime ?? p.startTime) > yesterday);
+    const points = Array.isArray(data) ? data : data?.dataPoints;
+    if (!Array.isArray(points) || points.length === 0)
+      return { value: "--", unit: "%", status: "unavailable" };
 
-      if (recentPoints.length > 0) {
-        const sorted = [...recentPoints].sort(
-          (a, b) => new Date(b.endTime ?? b.startTime).getTime() - new Date(a.endTime ?? a.startTime).getTime()
-        );
-        const latest = sorted[0];
-        const spo2 = latest.value?.fpVal ?? latest.value?.oxygenSaturationPercent;
-        if (spo2 != null) {
-          return {
-            value: Math.round(Number(spo2)).toString(),
-            unit: "%",
-            timestamp: latest.endTime ?? latest.startTime,
-            status: "ok",
-          };
-        }
-      }
-    }
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+    const validPoints = points
+      .map((p: any) => {
+        const ts = extractTimestamp(p.oxygenSaturation?.sampleTime);
+        const pct = p.oxygenSaturation?.percentage;
+        return { ts, pct, date: ts ? new Date(ts) : null };
+      })
+      // Fitbit sends 50.0 as a placeholder for "no reading" — filter it out
+      .filter((p) => p.pct != null && p.pct > 70 && p.date && p.date > yesterday)
+      .sort((a, b) => b.date!.getTime() - a.date!.getTime());
+
+    if (validPoints.length === 0)
+      return { value: "--", unit: "%", status: "unavailable" };
+
+    const latest = validPoints[0];
+    return {
+      value: Math.round(Number(latest.pct)).toString(),
+      unit: "%",
+      timestamp: latest.ts ?? undefined,
+      status: "ok",
+    };
   } catch (e) {
     console.error("[google-health] Parse blood oxygen error:", e);
+    return { value: "--", unit: "%", status: "unavailable" };
   }
-  return { value: "--", unit: "%", status: "unavailable" };
 }
 
 function parseSteps(data: any): HealthMetric {
   try {
-    const points = data?.dataPoints;
-    if (Array.isArray(points) && points.length > 0) {
-      let total = 0;
-      let latestTime = "";
-      
-      const todayStart = new Date();
-      todayStart.setHours(0, 0, 0, 0);
+    const points = Array.isArray(data) ? data : data?.dataPoints;
+    if (!Array.isArray(points) || points.length === 0)
+      return { value: "--", unit: "steps", status: "unavailable" };
 
-      for (const dp of points) {
-        const t = dp.endTime ?? dp.startTime;
-        if (new Date(t) < todayStart) continue; // Only sum today's steps
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
 
-        const s = dp.value?.intVal ?? dp.value?.fpVal ?? 0;
-        total += Number(s);
-        if (!latestTime || new Date(t) > new Date(latestTime)) latestTime = t;
-      }
-      if (total > 0) {
-        return {
-          value: Math.round(total).toLocaleString(),
-          unit: "steps",
-          timestamp: latestTime || new Date().toISOString(),
-          status: "ok",
-        };
-      }
+    let total = 0;
+    let latestTs: string | null = null;
+
+    for (const dp of points) {
+      const endTime = dp.steps?.interval?.endTime;
+      if (!endTime) continue;
+
+      const date = new Date(endTime);
+      if (date < todayStart) continue;
+
+      total += Number(dp.steps?.count ?? 0);
+      if (!latestTs || date > new Date(latestTs)) latestTs = endTime;
     }
+
+    if (total === 0) return { value: "--", unit: "steps", status: "unavailable" };
+
+    return {
+      value: Math.round(total).toLocaleString(),
+      unit: "steps",
+      timestamp: latestTs ?? new Date().toISOString(),
+      status: "ok",
+    };
   } catch (e) {
     console.error("[google-health] Parse steps error:", e);
+    return { value: "--", unit: "steps", status: "unavailable" };
   }
-  return { value: "--", unit: "steps", status: "unavailable" };
 }
-
 function parseSleep(data: any): HealthMetric {
   try {
-    const points = data?.dataPoints;
-    if (Array.isArray(points) && points.length > 0) {
-      let totalMs = 0;
-      let latestEnd = "";
-      
-      const yesterday6pm = new Date();
-      yesterday6pm.setDate(yesterday6pm.getDate() - 1);
-      yesterday6pm.setHours(18, 0, 0, 0);
+    const points = Array.isArray(data) ? data : data?.dataPoints;
+    if (!Array.isArray(points) || points.length === 0)
+      return { value: "--", unit: "hrs", status: "unavailable" };
 
-      for (const dp of points) {
-        const start = new Date(dp.startTime);
-        const end = new Date(dp.endTime);
-        
-        if (end < yesterday6pm) continue; // Only count recent sleep
+    const sessions = points
+      .map((dp: any) => {
+        const endTime = dp.sleep?.interval?.endTime;
+        const minutesAsleep = Number(dp.sleep?.summary?.minutesAsleep ?? 0);
+        return { endTime, minutesAsleep };
+      })
+      .filter((s) => s.endTime && s.minutesAsleep > 0)
+      .sort((a, b) => new Date(b.endTime).getTime() - new Date(a.endTime).getTime());
 
-        // Some sleep records include sleep stages, filter out awake if needed
-        const stage = dp.value?.sleepStages?.[0]?.stage?.toLowerCase(); 
-        if (stage === "awake" || stage === "out_of_bed") continue;
+    if (sessions.length === 0)
+      return { value: "--", unit: "hrs", status: "unavailable" };
 
-        if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
-          totalMs += end.getTime() - start.getTime();
-          if (!latestEnd || end > new Date(latestEnd)) latestEnd = dp.endTime;
-        }
-      }
+    const latest = sessions[0];
+    const hours = latest.minutesAsleep / 60;
 
-      const hours = totalMs / (1000 * 60 * 60);
-      if (hours > 0 && hours < 24) {
-        return {
-          value: hours.toFixed(1),
-          unit: "hrs",
-          timestamp: latestEnd || new Date().toISOString(),
-          status: "ok",
-        };
-      }
+    if (hours <= 0 || hours >= 24)
+      return { value: "--", unit: "hrs", status: "unavailable" };
+
+    const isStale = Date.now() - new Date(latest.endTime).getTime() > 24 * 60 * 60 * 1000;
+
+    // FIX: when data is stale, show a friendly message with the actual date
+    // instead of a raw value, so caregivers immediately understand why
+    // the number looks old.
+    if (isStale) {
+      const lastDate = new Date(latest.endTime).toLocaleDateString("en-US", {
+        month: "long",
+        day: "numeric",
+      });
+      return {
+        value: `Last recorded sleep was on ${lastDate}`,
+        unit: "",
+        timestamp: latest.endTime,
+        status: "stale",
+      };
     }
+
+    return {
+      value: hours.toFixed(1),
+      unit: "hrs",
+      timestamp: latest.endTime,
+      status: "ok",
+    };
   } catch (e) {
     console.error("[google-health] Parse sleep error:", e);
+    return { value: "--", unit: "hrs", status: "unavailable" };
   }
-  return { value: "--", unit: "hrs", status: "unavailable" };
 }
 
 function parseExercise(data: any): HealthMetric {
   try {
-    const points = data?.dataPoints;
-    if (Array.isArray(points) && points.length > 0) {
-      let totalMin = 0;
-      let latestTime = "";
-      
-      const todayStart = new Date();
-      todayStart.setHours(0, 0, 0, 0);
+    const points = Array.isArray(data) ? data : data?.dataPoints;
+    if (!Array.isArray(points) || points.length === 0)
+      return { value: "--", unit: "min", status: "unavailable" };
 
-      for (const dp of points) {
-        const t = dp.endTime ?? dp.startTime;
-        if (new Date(t) < todayStart) continue; // Only today's exercise
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
 
-        const m = dp.value?.intVal ?? dp.value?.fpVal ?? dp.value?.activeMinutes ?? dp.value?.durationMinutes ?? 0;
-        totalMin += Number(m);
-        if (!latestTime || new Date(t) > new Date(latestTime)) latestTime = t;
-      }
-      if (totalMin > 0) {
-        return {
-          value: Math.round(totalMin).toString(),
-          unit: "min",
-          timestamp: latestTime || new Date().toISOString(),
-          status: "ok",
-        };
-      }
+    let totalMin = 0;
+    let latestTs: string | null = null;
+
+    for (const dp of points) {
+      const ts =
+        extractTimestamp(dp.activitySummary?.endTime) ??
+        extractTimestamp(dp.activitySummary?.startTime);
+      if (!ts) continue;
+
+      const date = new Date(ts);
+      if (date < todayStart) continue;
+
+      const mins = dp.activitySummary?.activeMinutes ?? 0;
+      totalMin += Number(mins);
+      if (!latestTs || date > new Date(latestTs)) latestTs = ts;
     }
+
+    if (totalMin === 0) return { value: "--", unit: "min", status: "unavailable" };
+
+    return {
+      value: Math.round(totalMin).toString(),
+      unit: "min",
+      timestamp: latestTs ?? new Date().toISOString(),
+      status: "ok",
+    };
   } catch (e) {
     console.error("[google-health] Parse exercise error:", e);
+    return { value: "--", unit: "min", status: "unavailable" };
   }
-  return { value: "--", unit: "min", status: "unavailable" };
 }
 
 // ─── Main Handler ─────────────────────────────────────────────────────────────
@@ -354,6 +400,8 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    
+
     // ── Fetch in parallel (v4 dataTypes) ───────────────────────────────────────
     // We don't send time filters to avoid 400 Bad Requests with API-specific field names.
     // Instead we fetch the last 500 records and filter in TypeScript above.
@@ -364,6 +412,13 @@ Deno.serve(async (req: Request) => {
       fetchDataPoints(accessToken, "sleep"),
       fetchDataPoints(accessToken, "active-minutes"),
     ]);
+    
+    // ── Debug: log raw shapes ───────────────────────────────────────────────
+     console.log("[DEBUG] heartRate:", JSON.stringify(heartRateData?.dataPoints?.[0] ?? heartRateData));
+    console.log("[DEBUG] spo2:", JSON.stringify(spo2Data?.dataPoints?.[0] ?? spo2Data));
+    console.log("[DEBUG] steps:", JSON.stringify(stepsData?.dataPoints?.[0] ?? stepsData));
+    console.log("[DEBUG] sleep:", JSON.stringify(sleepData?.dataPoints?.[0] ?? sleepData));
+    console.log("[DEBUG] exercise:", JSON.stringify(exerciseData?.dataPoints?.[0] ?? exerciseData));
 
     const healthData = {
       heartRate:   parseHeartRate(heartRateData),
@@ -371,14 +426,14 @@ Deno.serve(async (req: Request) => {
       steps:       parseSteps(stepsData),
       sleep:       parseSleep(sleepData),
       exercise:    parseExercise(exerciseData),
-      lastSyncedAt: now.toISOString(),
+      lastSyncedAt: new Date().toISOString(),
     };
 
     return new Response(
       JSON.stringify({
         success: true,
         data: healthData,
-        debug: { heartRateData, spo2Data, stepsData, sleepData, exerciseData },
+        ...(DEBUG ? { debug: { heartRateData, spo2Data, stepsData, sleepData, exerciseData } } : {}),
       }),
       { status: 200, headers: corsHeaders }
     );
